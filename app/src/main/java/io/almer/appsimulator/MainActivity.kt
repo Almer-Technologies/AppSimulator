@@ -72,6 +72,8 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun startService(receiver: BroadcastReceiver){
+        //Tell the service that we want to use it,
+        //it will turn on the mic and load the default grammar
         Button(onClick = {
             //turn on the mic in the voice service
             val intent = Intent().apply {
@@ -87,8 +89,10 @@ class MainActivity : ComponentActivity() {
     }
     @Composable
     fun stopService(){
+        //Tell the service that we don't want to use it,
+        //it will turn off the mic and unload the default grammar
         Button(onClick = {
-            //send the intent that stop the microphone in voice service
+            //send the intent that stops the microphone in voice service
             val intent = Intent().apply {
                 action = BROADCAST_STOP_SERVICE
                 flags = Intent.FLAG_INCLUDE_STOPPED_PACKAGES
@@ -159,11 +163,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    //Send the Words List to the service, it will listen for these words and send
+                    //broadcasts when one of the sent words is recognized
                     val intent = Intent()
                     intent.action = BROADCAST_UPLOAD_GRAMMAR
                     intent.flags = Intent.FLAG_INCLUDE_STOPPED_PACKAGES
                     intent.putExtra(WORDS_LIST, toSend)
-                    intent.putExtra("APP_NAME", "AppSimulator")
+                    intent.putExtra(APP_NAME, "AppSimulator")
                     sendBroadcast(intent)
                     Log.d(TAG, "upload grammar sent")
 
