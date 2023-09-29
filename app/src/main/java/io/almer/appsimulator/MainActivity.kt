@@ -1,6 +1,5 @@
 package io.almer.appsimulator
 
-import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -10,16 +9,13 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.almer.appsimulator.receiver.TAG
@@ -27,6 +23,11 @@ import io.almer.appsimulator.ui.theme.AppSimulatorTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import android.Manifest
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import java.io.File
 import java.io.FileOutputStream
 
@@ -51,12 +52,13 @@ class MainActivity : ComponentActivity() {
         audioPlayer = AndroidAudioPlayer()
 
         setContent {
+            var hideKeyboard by remember { mutableStateOf(false) }
             AppSimulatorTheme {
                 // A surface container using the 'background' color from the theme
                 Surface(
                     modifier = Modifier.fillMaxSize(), color = MaterialTheme.colors.background
                 ) {
-                    Column {
+                    Column(modifier = Modifier.clickable { hideKeyboard = true }) {
                         Text(
                             text = "Add the phrases* you want to be recognized!\n" + "A pop up will appear when you say one of them!",
                             fontSize = 25.sp
@@ -73,7 +75,7 @@ class MainActivity : ComponentActivity() {
                         )
                         Divider(color = Color.Blue, thickness = 2.dp)
                         Column {
-                            content()
+                            Content(onFocusClear = {hideKeyboard = false}, hideKeyboard)
                         }
                     }
                 }
@@ -96,15 +98,17 @@ class MainActivity : ComponentActivity() {
 
 
     @Composable
-    fun content() {
+    fun Content(onFocusClear: () -> Unit, hideKeyboard: Boolean) {
         val scaffoldState: ScaffoldState = rememberScaffoldState()
-        val coroutineScope: CoroutineScope = rememberCoroutineScope()
+        val scope: CoroutineScope = rememberCoroutineScope()
         val text = remember { mutableStateOf("") }
+        val focusManager = LocalFocusManager.current
+
 
         LaunchedEffect(key1 = true) {
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context, intent: Intent) {
-                    coroutineScope.launch {
+                    scope.launch {
                         scaffoldState.snackbarHostState.showSnackbar(
                             message = "Received ${intent.getStringExtra(EXTRA_COMMAND)}",
                             actionLabel = "Close",
@@ -116,7 +120,6 @@ class MainActivity : ComponentActivity() {
             registerReceiver(receiver, IntentFilter(ACTION_SPEECH_EVENT))
         }
 
-        val view = LocalView.current
         Scaffold(scaffoldState = scaffoldState) {
             Column {
                 RestoreGrammarButton()
@@ -125,26 +128,15 @@ class MainActivity : ComponentActivity() {
                     onValueChange = { newText ->
                         text.value = newText
                     },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = {
+                        focusManager.clearFocus()
+                    }),
                     modifier = Modifier.fillMaxWidth(0.83f),
                 )
-                Button(onClick = {
-                    audioRecorder.startRecording(recordFile)
-                }) {
-                    Text("Record")
-                }
-                Button(onClick = {
-                    audioRecorder.stopRecording()
-                    audioPlayer.playFile(recordFile)
-                }) {
-                    Text("Play Record")
-                }
 
                 Button(onClick = {
-
-                    val inputMethodManager =
-                        getSystemService(Activity.INPUT_METHOD_SERVICE) as InputMethodManager
-                    inputMethodManager.hideSoftInputFromWindow(view.windowToken, 0)
-                    coroutineScope.launch {
+                    scope.launch {
                         scaffoldState.snackbarHostState.showSnackbar(
                             message = "Grammar sent: " + text.value.split("-").toString(),
                             actionLabel = "Close"
@@ -178,8 +170,25 @@ class MainActivity : ComponentActivity() {
                 }) {
                     Text(text = "Send")
                 }
+
+                Button(onClick = {
+                    audioRecorder.startRecording(recordFile)
+                }) {
+                    Text("Record")
+                }
+                Button(onClick = {
+                    audioRecorder.stopRecording()
+                    audioPlayer.playFile(recordFile)
+                }) {
+                    Text("Play Record")
+                }
             }
 
+        }
+
+        if (hideKeyboard) {
+            focusManager.clearFocus()
+            onFocusClear()
         }
     }
 }
