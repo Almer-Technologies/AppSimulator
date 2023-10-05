@@ -4,6 +4,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.MediaPlayer
+import android.media.MediaRecorder
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -15,54 +18,64 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.almer.appsimulator.receiver.TAG
 import io.almer.appsimulator.ui.theme.AppSimulatorTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import android.Manifest
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import java.io.File
+import java.io.FileOutputStream
 
 private const val TAG = "AppSimulator"
-private const val BROADCAST_UPLOAD_GRAMMAR = "io.almer.voiceAssistantUploadGrammar"
-private const val BROADCAST_START_SERVICE = "io.almer.voiceAssistantStart"
-private const val BROADCAST_STOP_SERVICE = "io.almer.voiceAssistantStop"
-private const val WORD_DETECTED_KEY = "io.almer.wordDetected"
-private const val EXTRA_WORD = "DETECTED_WORD"
-private const val WORDS_LIST = "WORDS_LIST"
-private const val APP_NAME = "APP_NAME"
+private const val ACTION_OVERRIDE = "com.realwear.wearhf.intent.action.OVERRIDE_COMMANDS"
+private const val ACTION_RESTORE = "com.realwear.wearhf.intent.action.RESTORE_COMMANDS"
+private const val ACTION_SPEECH_EVENT = "com.realwear.wearhf.intent.action.SPEECH_EVENT"
+private const val EXTRA_COMMAND = "command"
+private const val EXTRA_COMMANDS = "com.realwear.wearhf.intent.extra.COMMANDS"
+private const val EXTRA_SOURCE = "com.realwear.wearhf.intent.extra.SOURCE_PACKAGE"
 
 class MainActivity : ComponentActivity() {
 
+    private lateinit var audioRecorder: AndroidAudioRecorder
+    private lateinit var audioPlayer: AndroidAudioPlayer
+    private lateinit var recordFile: File
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        this.requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 0)
+        recordFile = File(applicationContext.cacheDir, "inputOutputTest.mp3")
+        audioRecorder = AndroidAudioRecorder(applicationContext)
+        audioPlayer = AndroidAudioPlayer()
 
         setContent {
+            var hideKeyboard by remember { mutableStateOf(false) }
             AppSimulatorTheme {
                 // A surface container using the 'background' color from the theme
                 Surface(
                     modifier = Modifier.fillMaxSize(), color = MaterialTheme.colors.background
                 ) {
-                    Column {
+                    Column(modifier = Modifier.clickable { hideKeyboard = true }) {
                         Text(
-                            text = "Add the phrases* you want to be recognized!\n" +
-                                    "A pop up will appear when you say one of them!",
-                            fontSize = 13.sp
+                            text = "Add the phrases* you want to be recognized!\n" + "A pop up will appear when you say one of them!",
+                            fontSize = 25.sp
                         )
                         Text(
                             text = """*Add just English phrases separated by - """,
-                            fontSize = 8.sp,
+                            fontSize = 25.sp,
                             color = Color.Gray,
                         )
                         Text(
                             text = """*You can add up to 20 phrases, beside these, there are 5 other "system words" available: up, down, left, right, home.""".trimMargin(),
-                            fontSize = 8.sp,
-                            color = Color.Gray,
-                        )
-                        Text(
-                            text = "Press the triangle to get rid of keyboard ->",
-                            fontSize = 8.sp,
+                            fontSize = 25.sp,
                             color = Color.Gray,
                         )
                         Divider(color = Color.Blue, thickness = 2.dp)
                         Column {
-                            SendGrammar()
+                            Content(onFocusClear = {hideKeyboard = false}, hideKeyboard)
                         }
                     }
                 }
@@ -71,87 +84,68 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    fun startService(receiver: BroadcastReceiver){
-        //Tell the service that we want to use it,
-        //it will turn on the mic and load the default grammar
+    fun RestoreGrammarButton() {
         Button(onClick = {
-            //turn on the mic in the voice service
             val intent = Intent().apply {
-                action = BROADCAST_START_SERVICE
-                flags = Intent.FLAG_INCLUDE_STOPPED_PACKAGES
-            }
-            //register the receiver to get the broadcasts when an word is detected
-            registerReceiver(receiver, IntentFilter(WORD_DETECTED_KEY))
-            sendBroadcast(intent)
-        }) {
-            Text(text = "Start")
-        }
-    }
-    @Composable
-    fun stopService(){
-        //Tell the service that we don't want to use it,
-        //it will turn off the mic and unload the default grammar
-        Button(onClick = {
-            //send the intent that stops the microphone in voice service
-            val intent = Intent().apply {
-                action = BROADCAST_STOP_SERVICE
+                action = ACTION_RESTORE
                 flags = Intent.FLAG_INCLUDE_STOPPED_PACKAGES
             }
             sendBroadcast(intent)
         }) {
-            Text(text = "Stop")
+            Text(text = "Restore")
         }
     }
 
 
     @Composable
-    fun SendGrammar() {
+    fun Content(onFocusClear: () -> Unit, hideKeyboard: Boolean) {
         val scaffoldState: ScaffoldState = rememberScaffoldState()
-        val coroutineScope: CoroutineScope = rememberCoroutineScope()
+        val scope: CoroutineScope = rememberCoroutineScope()
         val text = remember { mutableStateOf("") }
+        val focusManager = LocalFocusManager.current
 
-        //receiver raise a notification when it gets
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                Log.i(
-                    io.almer.appsimulator.receiver.TAG,
-                    "received ${intent.getStringExtra(EXTRA_WORD)}"
-                )
-                coroutineScope.launch {
-                    scaffoldState.snackbarHostState.showSnackbar(
-                        message = "Received ${intent.getStringExtra(EXTRA_WORD)}",
-                        actionLabel = "Close",
-                        duration = SnackbarDuration.Short
-                    )
+
+        LaunchedEffect(key1 = true) {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    scope.launch {
+                        scaffoldState.snackbarHostState.showSnackbar(
+                            message = "Received ${intent.getStringExtra(EXTRA_COMMAND)}",
+                            actionLabel = "Close",
+                            duration = SnackbarDuration.Short
+                        )
+                    }
                 }
             }
+            registerReceiver(receiver, IntentFilter(ACTION_SPEECH_EVENT))
         }
 
         Scaffold(scaffoldState = scaffoldState) {
             Column {
-                Row {
-                    startService(receiver)
-                    stopService()
-                }
+                RestoreGrammarButton()
                 OutlinedTextField(
                     value = text.value,
                     onValueChange = { newText ->
                         text.value = newText
                     },
-                    modifier = Modifier.fillMaxWidth(0.83f)
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = {
+                        focusManager.clearFocus()
+                    }),
+                    modifier = Modifier.fillMaxWidth(0.83f),
                 )
 
                 Button(onClick = {
-                    coroutineScope.launch {
+                    scope.launch {
                         scaffoldState.snackbarHostState.showSnackbar(
-                            message = "Grammar sent: " + text.value.split("-")
-                                .toString(), actionLabel = "Close"
+                            message = "Grammar sent: " + text.value.split("-").toString(),
+                            actionLabel = "Close"
                         )
                     }
 
                     val toSend = arrayListOf<String>()
 
-                    if (text.value.length > 0) {
+                    if (text.value.isNotEmpty()) {
                         text.value.split("-").forEach {
                             toSend.add(it)
                         }
@@ -165,11 +159,10 @@ class MainActivity : ComponentActivity() {
 
                     //Send the Words List to the service, it will listen for these words and send
                     //broadcasts when one of the sent words is recognized
-                    val intent = Intent()
-                    intent.action = BROADCAST_UPLOAD_GRAMMAR
+                    val intent = Intent(ACTION_OVERRIDE)
                     intent.flags = Intent.FLAG_INCLUDE_STOPPED_PACKAGES
-                    intent.putExtra(WORDS_LIST, toSend)
-                    intent.putExtra(APP_NAME, "AppSimulator")
+                    intent.putExtra(EXTRA_SOURCE, packageName)
+                    intent.putExtra(EXTRA_COMMANDS, toSend)
                     sendBroadcast(intent)
                     Log.d(TAG, "upload grammar sent")
 
@@ -177,8 +170,85 @@ class MainActivity : ComponentActivity() {
                 }) {
                     Text(text = "Send")
                 }
+
+                Button(onClick = {
+                    audioRecorder.startRecording(recordFile)
+                }) {
+                    Text("Record")
+                }
+                Button(onClick = {
+                    audioRecorder.stopRecording()
+                    audioPlayer.playFile(recordFile)
+                }) {
+                    Text("Play Record")
+                }
             }
 
         }
+
+        if (hideKeyboard) {
+            focusManager.clearFocus()
+            onFocusClear()
+        }
     }
 }
+
+class AndroidAudioRecorder(
+    private val context: Context,
+) {
+
+    private var recorder: MediaRecorder? = null
+
+    private fun createRecorder(): MediaRecorder {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            MediaRecorder(context)
+        } else MediaRecorder()
+    }
+
+    fun startRecording(outputFile: File) {
+        if (recorder != null) return
+        createRecorder().apply {
+            setAudioSource(MediaRecorder.AudioSource.MIC)
+            setOutputFormat(MediaRecorder.OutputFormat.AMR_WB)
+            setAudioEncoder(MediaRecorder.AudioEncoder.AMR_WB)
+            setOutputFile(FileOutputStream(outputFile).fd)
+            setAudioEncodingBitRate(238500)
+            setAudioSamplingRate(16000)
+            prepare()
+            start()
+            recorder = this
+        }
+    }
+
+    fun stopRecording() {
+        recorder?.stop()
+        recorder?.reset()
+        recorder = null
+    }
+}
+
+class AndroidAudioPlayer() {
+
+    private var player: MediaPlayer? = null
+
+    fun playFile(file: File) {
+        try {
+            player = MediaPlayer().apply {
+                setDataSource(file.path)
+                prepare()
+                start()
+
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to play file", e)
+        }
+    }
+
+    fun stopPlayer() {
+        player?.stop()
+        player?.release()
+        player = null
+    }
+}
+
+
